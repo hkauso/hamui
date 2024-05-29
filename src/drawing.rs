@@ -1,8 +1,5 @@
 //! Components
-use crossterm::cursor;
-use crossterm::QueueableCommand;
-use std::io::{StdoutLock, Write};
-
+use crate::buffer::{BufferWrite, PseudoBuffer};
 use crate::State;
 
 // traits
@@ -12,7 +9,7 @@ pub trait Component {
 
 /// Component can be created with "::new()"
 pub trait Creatable {
-    fn new(stdout: StdoutLock<'static>) -> Self;
+    fn new(buffer: PseudoBuffer) -> Self;
 }
 
 /// Component can be clicked
@@ -67,7 +64,6 @@ pub fn check_click(state: &State, res: RectBoundary) -> bool {
 
 // line
 pub struct DownwardsLine {
-    pub stdout: StdoutLock<'static>,
     pub rect: RectBoundary,
 }
 
@@ -81,21 +77,19 @@ impl DownwardsLine {
     /// * `char` - line character
     /// * `end_char` - line character at the end of the line (for corners)
     pub fn new(
-        stdout: &mut StdoutLock<'static>,
+        buffer: &mut PseudoBuffer,
         height: u16,
         start: Vec2,
         char: &str,
         end_char: &str,
     ) -> RectBoundary {
         for i in 0..height {
-            stdout.queue(cursor::MoveTo(start.0, start.1 + i)).unwrap();
-
             if i == height - 1 {
-                stdout.write(end_char.as_bytes()).unwrap();
+                buffer.write_str((start.0, start.1 + i), end_char).unwrap();
                 break;
             }
 
-            stdout.write(char.as_bytes()).unwrap();
+            buffer.write_str((start.0, start.1 + i), char).unwrap();
         }
 
         // return
@@ -108,12 +102,12 @@ impl DownwardsLine {
 
 // box
 pub struct QuickBox {
-    pub stdout: StdoutLock<'static>,
+    pub buffer: PseudoBuffer,
 }
 
 impl Creatable for QuickBox {
-    fn new(stdout: StdoutLock<'static>) -> Self {
-        QuickBox { stdout }
+    fn new(buffer: PseudoBuffer) -> Self {
+        QuickBox { buffer }
     }
 }
 
@@ -133,19 +127,9 @@ impl Component for QuickBox {
         let range_y = pos.1..(pos.1 + size.1); // how many lines we should write whitespace characters in
 
         for row in range_y {
-            self.stdout.queue(cursor::MoveTo(pos.0, row))?;
-            self.stdout
-                .write(" ".repeat(len_x as usize).to_string().as_bytes())?;
+            self.buffer
+                .write_str((pos.0, row), &" ".repeat(len_x as usize))?;
         }
-
-        // move cursor
-        self.stdout.queue(cursor::MoveTo(pos.0, pos.1))?;
-
-        // make sure size isn't too big
-        // if size.0 >= window_size.0 {
-
-        //     size.0 -= window_size.0 - 5;
-        // }
 
         // auto resize (y)
         if size.1 >= window_size.1 {
@@ -157,36 +141,34 @@ impl Component for QuickBox {
         let line_bottom = "─".repeat((size.0 - 2) as usize);
 
         // write
-        self.stdout.write(line_top.as_bytes())?; // top
+        self.buffer.write_str(pos, &line_top)?; // top
 
-        DownwardsLine::new(&mut self.stdout, size.1, (pos.0, pos.1 + 1), "│", "╰"); // left
+        DownwardsLine::new(&mut self.buffer, size.1, (pos.0, pos.1 + 1), "│", "╰"); // left
         DownwardsLine::new(
             // right
-            &mut self.stdout,
+            &mut self.buffer,
             size.1,
             (pos.0 + size.0 - 1, pos.1 + 1),
             "│",
             "╯",
         );
 
-        self.stdout
-            .queue(cursor::MoveTo(pos.0 + 1, pos.1 + size.1))?;
-        self.stdout.write(line_bottom.as_bytes())?; // bottom
+        self.buffer
+            .write_str((pos.0 + 1, pos.1 + size.1), &line_bottom)?; // bottom
 
         // done
-        self.stdout.queue(cursor::MoveTo(0, 0))?;
         Ok(RectBoundary { pos, size })
     }
 }
 
 // text
 pub struct Text {
-    pub stdout: StdoutLock<'static>,
+    pub buffer: PseudoBuffer,
 }
 
 impl Creatable for Text {
-    fn new(stdout: StdoutLock<'static>) -> Self {
-        Text { stdout }
+    fn new(buffer: PseudoBuffer) -> Self {
+        Text { buffer }
     }
 }
 
@@ -198,8 +180,7 @@ impl Text {
 
         // draw
         // center.0 + pos.0 so it's offset by the position of what we're centering around
-        self.stdout.queue(cursor::MoveTo(center.0 + pos.0, pos.1))?;
-        self.stdout.write(text.as_bytes())?;
+        self.buffer.write_str((center.0 + pos.0, pos.1), text)?;
 
         // done
         Ok(RectBoundary {
@@ -212,8 +193,7 @@ impl Text {
     pub fn render(&mut self, text: &str, pos: Vec2) -> DrawingResult {
         // draw
         // center.0 + pos.0 so it's offset by the position of what we're centering around
-        self.stdout.queue(cursor::MoveTo(pos.0, pos.1))?;
-        self.stdout.write(text.as_bytes())?;
+        self.buffer.write_str(pos, text)?;
 
         // done
         Ok(RectBoundary {
@@ -226,9 +206,8 @@ impl Text {
     pub fn render_button(&mut self, text: &str, pos: Vec2) -> DrawingResult {
         // draw
         // center.0 + pos.0 so it's offset by the position of what we're centering around
-        self.stdout.queue(cursor::MoveTo(pos.0, pos.1))?;
-        self.stdout
-            .write(format!("\x1b[107;30m➚ {text}\x1b[0m").as_bytes())?;
+        self.buffer
+            .write_str(pos, &format!("\x1b[107;30m➚ {text}\x1b[0m"))?;
 
         // done
         Ok(RectBoundary {
@@ -242,12 +221,12 @@ impl Clickable for Text {}
 
 // status line
 pub struct StatusLine {
-    pub stdout: StdoutLock<'static>,
+    pub buffer: PseudoBuffer,
 }
 
 impl Creatable for StatusLine {
-    fn new(stdout: StdoutLock<'static>) -> Self {
-        StatusLine { stdout }
+    fn new(buffer: PseudoBuffer) -> Self {
+        StatusLine { buffer }
     }
 }
 
@@ -258,17 +237,14 @@ impl Component for StatusLine {
     /// * `stdout`
     /// * `rect` - size(x, y), pos(x, y)
     fn render(&mut self, window_size: (u16, u16), rect: RectBoundary) -> DrawingResult {
-        // move to pos
-        self.stdout.queue(cursor::MoveTo(rect.pos.0, rect.pos.1))?;
-
         // draw chars
-        self.stdout.write(b"\x1b[107;30m")?; // white backgroud, black text
-        self.stdout
-            .write(" ".repeat(rect.size.0 as usize).to_string().as_bytes())?;
-        self.stdout.write(b"\x1b[0m")?;
+        self.buffer.write_str(rect.pos, "\x1b[107;30m")?; // white backgroud, black text
+        self.buffer
+            .write_str(rect.pos, &" ".repeat(rect.size.0 as usize))?;
+        self.buffer
+            .write_str((rect.pos.0 + rect.size.0, rect.pos.1), "\x1b[0m")?;
 
         // done
-        self.stdout.queue(cursor::MoveTo(0, 0))?;
         Ok(RectBoundary {
             pos: rect.pos,
             size: (window_size.0, 1),

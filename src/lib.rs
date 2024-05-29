@@ -6,15 +6,18 @@ use crossterm::QueueableCommand;
 use crossterm::{cursor, terminal};
 use std::io::{Result as IOResult, Stdout, Write};
 
+use crate::buffer::BufferWrite;
+
 /// Main UI state
 pub struct State {
     /// Window size as a [`Vec2`]
     pub window_size: drawing::Vec2,
-    /// If we are in mouse cursor mode or text mode
+    /// If we are in mouse cursor mode or keyboard mode
     pub keyboard_input_mode: bool,
     /// Where the user has clicked on the screen (in cursor mode)
+    /// Where we are typing (in keyboard mode)
     pub clicked: drawing::Vec2,
-    /// Current text input (NOT cursor mode)
+    /// Current text input (in keyboard mode)
     pub input: String,
     /// Where the cursor currently is (in cursor mode)
     pub cursor_pos: drawing::Vec2,
@@ -22,20 +25,19 @@ pub struct State {
     pub min_x: u16,
 }
 
+pub type Drawfn = dyn FnMut(&mut State, &mut buffer::PseudoBuffer) -> buffer::PseudoBuffer;
+
 /// UI Frame
 pub struct Frame<'a> {
     stdout: Stdout,
-    draw_fn: &'a mut dyn FnMut(&mut State, &mut buffer::Buffer) -> (),
+    draw_fn: &'a mut Drawfn,
     buffer: buffer::Buffer,
     state: State,
 }
 
 impl Frame<'_> {
     /// Create a new [`UIFrame`]
-    pub fn new(
-        stdout: Stdout,
-        draw_fn: &'_ mut dyn FnMut(&mut State, &mut buffer::Buffer) -> (),
-    ) -> Frame {
+    pub fn new(stdout: Stdout, draw_fn: &'_ mut Drawfn) -> Frame {
         let window_size = terminal::size().unwrap();
 
         // ...
@@ -56,7 +58,15 @@ impl Frame<'_> {
 
     /// Draw frame
     pub fn step(&mut self) -> IOResult<buffer::BufState> {
-        (self.draw_fn)(&mut self.state, &mut self.buffer);
+        // call function and consume changes
+        let pseudo = (self.draw_fn)(
+            &mut self.state,
+            &mut buffer::PseudoBuffer::new(self.buffer.size),
+        );
+
+        self.buffer.consume_changes(pseudo.get_changes())?; // move changes to buffer
+
+        // commit changes
         self.buffer.commit()?; // push buffer to screen
         self.move_cursor(self.state.cursor_pos)?; // sync actual cursor and cusor_pos
         Ok(buffer::BufState::Ok)
@@ -128,11 +138,7 @@ impl Frame<'_> {
                                 }
 
                                 // add to prompt
-                                // prompt.push(c); // append only
-                                // this means we can only write at min input,
-                                // we could possibly store a "write_pos" in the state and use that?
-                                // TODO: that ^
-                                let write_at = self.state.min_x;
+                                let write_at = self.state.clicked.0;
                                 let real_pos = self.state.cursor_pos.0 - write_at; // where we are in the prompt
 
                                 if real_pos > self.state.input.len() as u16 {
@@ -172,8 +178,14 @@ impl Frame<'_> {
                         KeyCode::Esc => {
                             self.state.keyboard_input_mode = !self.state.keyboard_input_mode;
 
-                            if self.state.keyboard_input_mode == false {
-                                self.state.cursor_pos.0 = self.state.min_x;
+                            if self.state.keyboard_input_mode == true {
+                                // we use the x of clicked to tell where we're typing,
+                                // setting this to the current cursor position will make
+                                // us type in the correct location
+                                self.state.clicked.0 = self.state.cursor_pos.0;
+                            } else {
+                                // TODO: do something to expose the input
+                                self.state.input = String::new(); // clear input
                             }
                         }
                         // Submit
@@ -196,7 +208,9 @@ impl Frame<'_> {
                                 self.state.cursor_pos = (0, 0);
                                 self.move_cursor(self.state.cursor_pos)?;
                             } else {
-                                self.state.cursor_pos = (0, self.state.cursor_pos.1 + 1);
+                                // line down from clicked.1 at clicked.0 (write_at)
+                                self.state.clicked.1 += 1;
+                                self.state.cursor_pos = self.state.clicked.clone();
                             }
 
                             // redraw
@@ -228,10 +242,10 @@ impl Frame<'_> {
                             }
 
                             // make sure we are within the prompt
-                            let write_at = self.state.min_x;
+                            let write_at = self.state.clicked.0;
                             let real_pos = self.state.cursor_pos.0 - write_at; // where we are in the prompt
 
-                            if real_pos > self.state.input.len() as u16 {
+                            if (real_pos > self.state.input.len() as u16) | (real_pos == 0) {
                                 return Ok(buffer::BufState::Ok);
                             }
 
@@ -251,9 +265,10 @@ impl Frame<'_> {
                                 buffer::BufCell::EMPTY,
                             )?;
 
-                            self.move_cursor((write_at, self.state.cursor_pos.1))?;
-                            self.stdout
-                                .write(" ".repeat(self.state.input.len() + 1).as_bytes())?;
+                            self.buffer.write_str(
+                                (write_at, self.state.cursor_pos.1),
+                                &" ".repeat(self.state.input.len() + 1),
+                            )?;
 
                             self.buffer.write_str(
                                 (write_at, self.state.cursor_pos.1),

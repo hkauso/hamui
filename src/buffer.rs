@@ -43,6 +43,31 @@ impl BufCell {
 
 pub type Row = Vec<BufCell>;
 
+// traits
+pub trait BufferWrite {
+    /// Write changes to the buffer.
+    /// If `pos` is greater than what the buffer supports, `Err` is returned.
+    ///
+    /// ## Arguments
+    /// * `pos` - [`Vec2`]
+    /// * `buf` - [`BufCell`] (new cell)
+    fn write_cell(&mut self, pos: Vec2, buf: BufCell) -> IOResult<BufState>;
+    /// Like [`write`], but with a str
+    fn write_str(&mut self, pos: Vec2, buf: &str) -> IOResult<BufState> {
+        let chars = buf.chars().collect::<Vec<char>>();
+
+        for i in 0..chars.len() {
+            // get pos
+            let pos = (pos.0 + (i as u16), pos.1);
+
+            // write char
+            self.write_cell(pos, BufCell::from_char(chars.get(i).unwrap().to_owned()))?;
+        }
+
+        Ok(BufState::Ok)
+    }
+}
+
 // main buffer
 pub struct Buffer {
     stdout: Stdout,
@@ -71,6 +96,11 @@ impl Buffer {
             vec: vec.clone(),
             screen_vec: vec.clone(),
         }
+    }
+
+    /// Stdout thing
+    pub fn queue(&mut self, cmd: impl crossterm::Command) -> IOResult<&mut Stdout> {
+        self.stdout.queue(cmd)
     }
 
     /// Resize a single vector to match screen size
@@ -105,54 +135,6 @@ impl Buffer {
     }
 
     // writing
-    /// Write changes to the buffer.
-    /// If `pos` is greater than what the buffer supports, `Err` is returned.
-    ///
-    /// ## Arguments
-    /// * `pos` - [`Vec2`]
-    /// * `buf` - [`BufCell`] (new cell)
-    pub fn write(&mut self, pos: Vec2, buf: BufCell) -> IOResult<BufState> {
-        // get row
-        let row = self.vec.get_mut(pos.1 as usize);
-
-        if row.is_none() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "Row is invalid.",
-            ));
-        }
-
-        let row: &mut Row = row.unwrap();
-
-        // update col
-        if pos.0 > row.len() as u16 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Column index is too large.",
-            ));
-        }
-
-        row[pos.0 as usize] = buf;
-
-        // return
-        Ok(BufState::Ok)
-    }
-
-    /// Like [`write`], but with a str
-    pub fn write_str(&mut self, pos: Vec2, buf: &str) -> IOResult<BufState> {
-        let chars = buf.chars().collect::<Vec<char>>();
-
-        for i in 0..chars.len() {
-            // get pos
-            let pos = (pos.0 + (i as u16), pos.1);
-
-            // write char
-            self.write(pos, BufCell::from_char(chars.get(i).unwrap().to_owned()))?;
-        }
-
-        Ok(BufState::Ok)
-    }
-
     /// Like [`write`], but with a range of columns
     pub fn fill_range(
         &mut self,
@@ -181,6 +163,15 @@ impl Buffer {
         }
 
         // return
+        Ok(BufState::Ok)
+    }
+
+    /// Consume changes from a [`PseudoBuffer`]
+    pub fn consume_changes(&mut self, changes: Vec<BufferChange>) -> IOResult<BufState> {
+        for change in changes {
+            self.write_cell(change.loc, change.cell)?;
+        }
+
         Ok(BufState::Ok)
     }
 
@@ -223,6 +214,12 @@ impl Buffer {
 
                 let screen_vec_char = screen_vec_char.unwrap();
 
+                // if screen_vec_char is not empty but this one is, skip
+                // we should directly write to the screen vec if we want to clear things
+                if (col.empty == true) && (screen_vec_char.empty == false) {
+                    continue;
+                }
+
                 // only update if char is different OR state changed
                 if screen_vec_char.char == col.char {
                     continue;
@@ -248,6 +245,97 @@ impl Buffer {
 
         // return
         self.vec.fill(BufCell::as_row(self.size.0));
+        Ok(BufState::Ok)
+    }
+}
+
+impl Write for Buffer {
+    // just forward everything to the stdout, this is just for convenience
+    fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
+        self.stdout.write(buf)
+    }
+
+    fn flush(&mut self) -> IOResult<()> {
+        self.stdout.flush()
+    }
+}
+
+impl BufferWrite for Buffer {
+    fn write_cell(&mut self, pos: Vec2, buf: BufCell) -> IOResult<BufState> {
+        // if we're writing an empty character, skip vec and write straight to screen
+        // this fixes issues with keyboard mode backspace and some random crashes (???)
+        let vec = if buf.empty == true {
+            &mut self.screen_vec
+        } else {
+            &mut self.vec
+        };
+
+        // get row
+        let row = vec.get_mut(pos.1 as usize);
+
+        if row.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Row is invalid.",
+            ));
+        }
+
+        let row: &mut Row = row.unwrap();
+
+        // update col
+        if pos.0 > row.len() as u16 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Column index is too large.",
+            ));
+        }
+
+        row[pos.0 as usize] = buf;
+
+        // return
+        Ok(BufState::Ok)
+    }
+}
+
+// pseudobuffer
+#[derive(Debug, Clone)]
+pub struct BufferChange {
+    pub loc: Vec2,
+    pub cell: BufCell,
+}
+
+/// This buffer receives changes like a normal buffer, but just stores them in a
+/// vector which can be pulled with `.get_changes()`.
+///
+/// This is not meant to be used internally. It exists because [`Buffer`] can't impl Clone.
+#[derive(Clone)]
+pub struct PseudoBuffer {
+    pub window_size: Vec2,
+    /// Changes is append ONLY. If you must undo a change, just overwrite it.
+    changes: Vec<BufferChange>,
+}
+
+impl PseudoBuffer {
+    pub fn new(window_size: Vec2) -> PseudoBuffer {
+        PseudoBuffer {
+            window_size,
+            changes: Vec::new(),
+        }
+    }
+
+    /// Get all changes to the buffer
+    pub fn get_changes(&self) -> Vec<BufferChange> {
+        self.changes.clone()
+    }
+}
+
+impl BufferWrite for PseudoBuffer {
+    fn write_cell(&mut self, pos: Vec2, buf: BufCell) -> IOResult<BufState> {
+        self.changes.push(BufferChange {
+            loc: pos,
+            cell: buf,
+        });
+
         Ok(BufState::Ok)
     }
 }
