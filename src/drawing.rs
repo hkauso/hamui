@@ -166,7 +166,9 @@ impl Creatable for Text {
 
 impl Text {
     /// Draw text at the center of a given [`Vec2`]
-    pub fn render_center(&mut self, text: &str, pos: Vec2, parent_width: u16) -> DrawingResult {
+    pub fn render_center(&mut self, leaf: TextLeaf, pos: Vec2, parent_width: u16) -> DrawingResult {
+        let text = &leaf.text;
+
         // get center
         let center = get_center((parent_width, 1), (text.len() as u16, 1));
 
@@ -185,7 +187,9 @@ impl Text {
     }
 
     /// Draw text at a given [`Vec2`]
-    pub fn render(&mut self, text: &str, pos: Vec2) -> DrawingResult {
+    pub fn render(&mut self, leaf: TextLeaf, pos: Vec2) -> DrawingResult {
+        let text = &leaf.text;
+
         // draw
         // center.0 + pos.0 so it's offset by the position of what we're centering around
         self.buffer.write_str(pos, text)?;
@@ -201,7 +205,9 @@ impl Text {
     }
 
     /// Draw text at a given [`Vec2`] as a button
-    pub fn render_button(&mut self, text: &str, pos: Vec2) -> DrawingResult {
+    pub fn render_button(&mut self, leaf: TextLeaf, pos: Vec2) -> DrawingResult {
+        let text = &leaf.text;
+
         // draw
         // center.0 + pos.0 so it's offset by the position of what we're centering around
         self.buffer
@@ -287,8 +293,12 @@ impl QuickRow {
 
     /// Render [`QuickRow`]. Components can only be simple text components.
     /// Starts at `rect.pos.0` and fills `components` with no gap.
-    /// `components` contains `(content, size)` (`(&str, Vec2)`)
-    pub fn render(&mut self, rect: RectBoundary, components: Vec<(&str, Vec2)>) -> DrawingResult {
+    /// `components` contains `(content, size)` (`(TextLeaf, Vec2)`)
+    pub fn render(
+        &mut self,
+        rect: RectBoundary,
+        components: Vec<(TextLeaf, Vec2)>,
+    ) -> DrawingResult {
         let mut prev_rect: Option<RectBoundary> = Option::None; // store previous row item
         let mut global_buffer = self.buffer.clone();
 
@@ -308,5 +318,90 @@ impl QuickRow {
 
         // ...
         Ok((rect, global_buffer.get_changes()))
+    }
+}
+
+// text leaf (just a small piece of text, not a full component)
+#[derive(Debug)]
+pub enum TextCommand {
+    Reset = 0,
+}
+
+#[derive(Debug)]
+pub enum TextAttribute {
+    Bold = 1,
+    Italic = 3,
+    Underline = 4,
+    Swap = 7,
+}
+
+#[derive(Debug)]
+pub enum TextColor {
+    Black = 30,
+    Red = 31,
+    Green = 32,
+    Yellow = 33,
+    Blue = 34,
+    Magenta = 35,
+    Cyan = 36,
+    White = 37,
+    BrightBlack = 90,
+    BrightRed = 91,
+    BrightGreen = 92,
+    BrightYellow = 93,
+    BrightBlue = 94,
+    BrightMagenta = 95,
+    BrightCyan = 96,
+    BrightWhite = 97,
+}
+
+#[derive(Debug)]
+pub enum TextBackgroundColor {
+    Black = 40,
+    Red = 41,
+    Green = 42,
+    Yellow = 43,
+    Blue = 44,
+    Magenta = 45,
+    Cyan = 46,
+    White = 47,
+    BrightBlack = 100,
+    BrightRed = 101,
+    BrightGreen = 102,
+    BrightYellow = 103,
+    BrightBlue = 104,
+    BrightMagenta = 105,
+    BrightCyan = 106,
+    BrightWhite = 107,
+}
+
+pub struct TextLeaf {
+    pub text: String,
+}
+
+impl TextLeaf {
+    pub fn new(text: String, fg: TextColor, bg: TextBackgroundColor) -> Self {
+        TextLeaf {
+            text: format!(
+                "\x1b[{};{}m{text}\x1b[{}m",
+                fg as u8,
+                bg as u8,
+                TextCommand::Reset as u8
+            ),
+        }
+    }
+}
+
+impl From<&str> for TextLeaf {
+    fn from(value: &str) -> Self {
+        TextLeaf {
+            text: value.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for TextLeaf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
     }
 }

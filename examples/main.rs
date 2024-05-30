@@ -1,6 +1,6 @@
 extern crate hamui;
 
-use hamui::drawing::{Component, Creatable, RectBoundary};
+use hamui::drawing::{Component, Creatable, RectBoundary, TextLeaf};
 use hamui::*;
 use std::io::{stdout, Write};
 
@@ -8,7 +8,7 @@ fn main() {
     let mut draw = |state: &mut State, mut buffer: buffer::PseudoBuffer| {
         buffer.set_changes(
             drawing::Text::new(buffer.clone())
-                .render("Hello, world!", (0, 0))
+                .render(TextLeaf::from("Hello, world!"), (0, 0))
                 .unwrap()
                 .1,
         );
