@@ -85,6 +85,7 @@ impl Frame<'_> {
         self.stdout.queue(terminal::EnterAlternateScreen)?;
         self.stdout.queue(cursor::MoveTo(0, 0))?;
         terminal::enable_raw_mode().unwrap();
+        self.stdout.queue(terminal::EnableLineWrap).unwrap();
         self.stdout
             .queue(crossterm::event::EnableMouseCapture)
             .unwrap();
@@ -95,6 +96,7 @@ impl Frame<'_> {
     pub fn exit(&mut self) -> () {
         terminal::disable_raw_mode().unwrap();
         self.stdout.queue(terminal::LeaveAlternateScreen).unwrap();
+        // self.stdout.queue(terminal::DisableLineWrap).unwrap();
         self.stdout
             .queue(crossterm::event::DisableMouseCapture)
             .unwrap();

@@ -103,6 +103,34 @@ impl Buffer {
         self.stdout.queue(cmd)
     }
 
+    /// Get a cell in the `screen_vec` using its [`Vec2`] position
+    pub fn get_cell(&mut self, pos: Vec2) -> IOResult<BufCell> {
+        // get row
+        let row = self.screen_vec.get_mut(pos.1 as usize);
+
+        if row.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Row is invalid.",
+            ));
+        }
+
+        let row = row.unwrap();
+
+        // get col
+        let col = row.get(pos.0 as usize);
+
+        if col.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Column is invalid.",
+            ));
+        }
+
+        // return
+        Ok(col.unwrap().to_owned())
+    }
+
     /// Resize a single vector to match screen size
     fn resize_vec(&mut self, mut vec: Vec<Row>, size: Vec2) -> IOResult<Vec<Row>> {
         // resize x
@@ -169,6 +197,15 @@ impl Buffer {
     /// Consume changes from a [`PseudoBuffer`]
     pub fn consume_changes(&mut self, changes: Vec<BufferChange>) -> IOResult<BufState> {
         for change in changes {
+            // make sure change is ACTUALLY a change
+            let cell = self.get_cell(change.loc)?;
+            let is_changed: bool = cell != change.cell;
+
+            if is_changed == false {
+                continue;
+            }
+
+            // ...
             self.write_cell(change.loc, change.cell)?;
         }
 
@@ -177,15 +214,17 @@ impl Buffer {
 
     /// Commit changes to buffer.
     pub fn commit(&mut self) -> IOResult<BufState> {
+        // self.queue(crossterm::terminal::BeginSynchronizedUpdate)?; // commit all changes at once
+
         // loop through rows to find changed rows
         // the buffer does NOT represent what is on screen, instead it is just
         // what SHOULD go on screen (we're allowed to lose some data since it'll likely redraw later)
         let empty_row = BufCell::as_row(self.size.0);
 
         for (y, row) in self.vec.clone().iter().enumerate() {
-            let is_changed = row != &empty_row; // if the row is no longer fully empty it changed
+            let is_empty = row != &empty_row;
 
-            if !is_changed {
+            if !is_empty {
                 continue;
             }
 
@@ -199,6 +238,12 @@ impl Buffer {
             }
 
             let screen_vec_row = screen_vec_row.unwrap();
+
+            // make sure something in the row ACTUALLY changed so we don't
+            // pointlessly move the cursor (which stops mouse events)
+            if screen_vec_row == row {
+                continue;
+            }
 
             // move cursor
             self.stdout.queue(cursor::MoveTo(0, y as u16))?;
@@ -225,7 +270,7 @@ impl Buffer {
                     continue;
                 }
 
-                // ...
+                // move vec row changes to screen_vec_row
                 screen_vec_row[x] = col.to_owned();
             }
 
@@ -245,6 +290,7 @@ impl Buffer {
 
         // return
         self.vec.fill(BufCell::as_row(self.size.0));
+        // self.queue(crossterm::terminal::EndSynchronizedUpdate)?; // commit to screen
         Ok(BufState::Ok)
     }
 }

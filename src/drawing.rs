@@ -119,18 +119,9 @@ impl Component for QuickBox {
     /// * `stdout`
     /// * `pos` - x, y
     /// * `size` - x, y
-    fn render(&mut self, window_size: (u16, u16), rect: RectBoundary) -> DrawingResult {
+    fn render(&mut self, window_size: Vec2, rect: RectBoundary) -> DrawingResult {
         let pos = rect.pos;
         let mut size = rect.size;
-
-        // clear space
-        let len_x = size.0; // how far we should write whitespace characters
-        let range_y = pos.1..(pos.1 + size.1); // how many lines we should write whitespace characters in
-
-        for row in range_y {
-            self.buffer
-                .write_str((pos.0, row), &" ".repeat(len_x as usize))?;
-        }
 
         // auto resize (y)
         if size.1 >= window_size.1 {

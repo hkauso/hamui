@@ -1,16 +1,27 @@
 extern crate hamui;
 
-use hamui::drawing::Creatable;
+use hamui::drawing::{Component, Creatable, RectBoundary};
 use hamui::*;
 use std::io::{stdout, Write};
 
 fn main() {
-    let mut update_needed: bool = true;
-
-    let mut draw = |_state: &mut State, mut buffer: buffer::PseudoBuffer| {
+    let mut draw = |state: &mut State, mut buffer: buffer::PseudoBuffer| {
         buffer.set_changes(
             drawing::Text::new(buffer.clone())
                 .render("Hello, world!", (0, 0))
+                .unwrap()
+                .1,
+        );
+
+        buffer.set_changes(
+            drawing::QuickBox::new(buffer.clone())
+                .render(
+                    state.window_size,
+                    RectBoundary {
+                        pos: (10, 5),
+                        size: (12, 5),
+                    },
+                )
                 .unwrap()
                 .1,
         );
@@ -27,15 +38,6 @@ fn main() {
     // draw frame
     loop {
         frame.poll_events().unwrap();
-
-        if update_needed == false {
-            // if we don't do some sort of check here, the cursor will always be moving
-            // and mouse input will not work ... only update when needed!
-            frame.step_no_draw().unwrap();
-            continue;
-        }
-
-        update_needed = false; // this would get set to true if something happened in that app that made an update be needed
         frame.step().unwrap();
     }
 }
