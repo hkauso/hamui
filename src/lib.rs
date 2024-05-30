@@ -25,7 +25,7 @@ pub struct State {
     pub min_x: u16,
 }
 
-pub type Drawfn = dyn FnMut(&mut State, &mut buffer::PseudoBuffer) -> buffer::PseudoBuffer;
+pub type Drawfn = dyn FnMut(&mut State, buffer::PseudoBuffer) -> buffer::PseudoBuffer;
 
 /// UI Frame
 pub struct Frame<'a> {
@@ -56,20 +56,22 @@ impl Frame<'_> {
         }
     }
 
-    /// Draw frame
-    pub fn step(&mut self) -> IOResult<buffer::BufState> {
-        // call function and consume changes
-        let pseudo = (self.draw_fn)(
-            &mut self.state,
-            &mut buffer::PseudoBuffer::new(self.buffer.size),
-        );
-
-        self.buffer.consume_changes(pseudo.get_changes())?; // move changes to buffer
-
+    /// Step rendering without redrawing components
+    pub fn step_no_draw(&mut self) -> IOResult<buffer::BufState> {
         // commit changes
         self.buffer.commit()?; // push buffer to screen
         self.move_cursor(self.state.cursor_pos)?; // sync actual cursor and cusor_pos
         Ok(buffer::BufState::Ok)
+    }
+
+    /// Step rendering
+    pub fn step(&mut self) -> IOResult<buffer::BufState> {
+        // call function and consume changes
+        let pseudo = (self.draw_fn)(&mut self.state, buffer::PseudoBuffer::new(self.buffer.size));
+        self.buffer.consume_changes(pseudo.get_changes())?; // move changes to buffer
+
+        // commit changes
+        self.step_no_draw()
     }
 
     /// Move cursor

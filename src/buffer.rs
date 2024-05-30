@@ -327,6 +327,11 @@ impl PseudoBuffer {
     pub fn get_changes(&self) -> Vec<BufferChange> {
         self.changes.clone()
     }
+
+    /// We can only append or overwrite the whole thing
+    pub fn set_changes(&mut self, changes: Vec<BufferChange>) -> () {
+        self.changes = changes;
+    }
 }
 
 impl BufferWrite for PseudoBuffer {

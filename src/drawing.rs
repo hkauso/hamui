@@ -1,10 +1,10 @@
 //! Components
-use crate::buffer::{BufferWrite, PseudoBuffer};
+use crate::buffer::{BufferChange, BufferWrite, PseudoBuffer};
 use crate::State;
 
 // traits
 pub trait Component {
-    fn render(&mut self, window_size: (u16, u16), rect: RectBoundary) -> DrawingResult;
+    fn render(&mut self, window_size: Vec2, rect: RectBoundary) -> DrawingResult;
 }
 
 /// Component can be created with "::new()"
@@ -31,7 +31,8 @@ pub trait Clickable {
 
 // types
 pub type Vec2 = (u16, u16);
-pub type DrawingResult = Result<RectBoundary, std::io::Error>;
+pub type DrawingResult = Result<DrawingNode, std::io::Error>;
+pub type DrawingNode = (RectBoundary, Vec<BufferChange>);
 
 #[derive(Clone, Debug)]
 pub struct RectBoundary {
@@ -157,7 +158,7 @@ impl Component for QuickBox {
             .write_str((pos.0 + 1, pos.1 + size.1), &line_bottom)?; // bottom
 
         // done
-        Ok(RectBoundary { pos, size })
+        Ok((RectBoundary { pos, size }, self.buffer.get_changes()))
     }
 }
 
@@ -183,10 +184,13 @@ impl Text {
         self.buffer.write_str((center.0 + pos.0, pos.1), text)?;
 
         // done
-        Ok(RectBoundary {
-            pos,
-            size: (text.len() as u16, 1),
-        })
+        Ok((
+            RectBoundary {
+                pos,
+                size: (text.len() as u16, 1),
+            },
+            self.buffer.get_changes(),
+        ))
     }
 
     /// Draw text at a given [`Vec2`]
@@ -196,10 +200,13 @@ impl Text {
         self.buffer.write_str(pos, text)?;
 
         // done
-        Ok(RectBoundary {
-            pos: (pos.0, pos.1),
-            size: (text.len() as u16, 1),
-        })
+        Ok((
+            RectBoundary {
+                pos: (pos.0, pos.1),
+                size: (text.len() as u16, 1),
+            },
+            self.buffer.get_changes(),
+        ))
     }
 
     /// Draw text at a given [`Vec2`] as a button
@@ -210,10 +217,13 @@ impl Text {
             .write_str(pos, &format!("\x1b[107;30m➚ {text}\x1b[0m"))?;
 
         // done
-        Ok(RectBoundary {
-            pos: (pos.0, pos.1),
-            size: (text.len() as u16, 1),
-        })
+        Ok((
+            RectBoundary {
+                pos: (pos.0, pos.1),
+                size: (text.len() as u16, 1),
+            },
+            self.buffer.get_changes(),
+        ))
     }
 }
 
@@ -245,9 +255,67 @@ impl Component for StatusLine {
             .write_str((rect.pos.0 + rect.size.0, rect.pos.1), "\x1b[0m")?;
 
         // done
-        Ok(RectBoundary {
-            pos: rect.pos,
-            size: (window_size.0, 1),
-        })
+        Ok((
+            RectBoundary {
+                pos: rect.pos,
+                size: (window_size.0, 1),
+            },
+            self.buffer.get_changes(),
+        ))
+    }
+}
+
+// row
+pub struct QuickRow {
+    pub buffer: PseudoBuffer,
+}
+
+impl Creatable for QuickRow {
+    fn new(buffer: PseudoBuffer) -> Self {
+        QuickRow { buffer }
+    }
+}
+
+impl QuickRow {
+    /// Get the correct position of the next component.
+    fn get_component_position(
+        &self,
+        prev_component_rect: Option<RectBoundary>,
+        mut component_pos: Vec2,
+    ) -> Vec2 {
+        if prev_component_rect.is_none() {
+            // leave component as is if it's the first
+            return component_pos;
+        }
+
+        let prev_component_rect = prev_component_rect.unwrap();
+        component_pos.0 += prev_component_rect.pos.0 + prev_component_rect.size.0; // new position is x + prev x + prev width
+                                                                                   // height (size.1) and y (pos.1) is ignored, we don't need that
+        component_pos
+    }
+
+    /// Render [`QuickRow`]. Components can only be simple text components.
+    /// Starts at `rect.pos.0` and fills `components` with no gap.
+    /// `components` contains `(content, size)` (`(&str, Vec2)`)
+    pub fn render(&mut self, rect: RectBoundary, components: Vec<(&str, Vec2)>) -> DrawingResult {
+        let mut prev_rect: Option<RectBoundary> = Option::None; // store previous row item
+        let mut global_buffer = self.buffer.clone();
+
+        for component in components {
+            // create text component
+            let mut text = Text::new(self.buffer.clone());
+
+            // get correct component
+            let pos = self.get_component_position(prev_rect.clone(), component.1);
+
+            // render
+            let res = text.render(component.0, pos)?;
+            global_buffer.set_changes([global_buffer.get_changes(), res.1].concat());
+            prev_rect = Option::Some(res.0);
+            // concat global_buffer with component changes
+        }
+
+        // ...
+        Ok((rect, global_buffer.get_changes()))
     }
 }
